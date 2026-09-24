@@ -1,0 +1,15 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Sistema operativo
+.DS_Store
+
+# Dati scaricati (si possono riscaricare)
+data/*.csv
+
+# Segreti Streamlit
+.streamlit/secrets.toml
