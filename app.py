@@ -4,6 +4,7 @@ import plotly.express as px
 import streamlit as st
 
 from src.data import clean_prices, download_prices, parse_tickers
+from src.portfolio import asset_summary, cumulative_returns, daily_returns
 
 st.set_page_config(page_title="Portfolio Optimizer", layout="wide")
 
@@ -63,7 +64,7 @@ if (prices.index[0].date() - start).days > 10:
         "(probabilmente un titolo e quotato da meno tempo)."
     )
 
-# --- OUTPUT ---
+# --- OUTPUT: DATI ---
 st.subheader("Dati scaricati")
 col1, col2, col3 = st.columns(3)
 col1.metric("Titoli", prices.shape[1])
@@ -74,10 +75,17 @@ st.subheader("Prezzi aggiustati")
 fig = px.line(prices, labels={"value": "Prezzo", "Date": "Data"})
 st.plotly_chart(fig)
 
-st.subheader("Andamento normalizzato (base 100)")
-normalized = prices / prices.iloc[0] * 100
-fig2 = px.line(normalized, labels={"value": "Valore (base 100)", "Date": "Data"})
+# --- OUTPUT: RENDIMENTI ---
+returns = daily_returns(prices)
+
+st.subheader("Rendimento cumulato")
+cum = cumulative_returns(returns) * 100
+fig2 = px.line(cum, labels={"value": "Rendimento cumulato (%)", "Date": "Data"})
 st.plotly_chart(fig2)
 
-with st.expander("Mostra tabella dati"):
+st.subheader("Statistiche per titolo")
+st.caption("Valori in %. Rendimenti e volatilita annualizzati con 252 giorni di borsa.")
+st.dataframe((asset_summary(prices) * 100).round(2))
+
+with st.expander("Mostra tabella prezzi"):
     st.dataframe(prices.tail(10).round(2))
