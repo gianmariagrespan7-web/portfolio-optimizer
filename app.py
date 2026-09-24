@@ -1,10 +1,12 @@
 from datetime import date, timedelta
 
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from src.data import clean_prices, download_prices, parse_tickers
+from src.optimization import optimal_portfolios
 from src.portfolio import (
     annualized_volatility,
     asset_summary,
@@ -133,7 +135,41 @@ if prices.shape[1] > 1:
             "La radice quadrata della diagonale e la volatilita annua."
         )
 
-# --- PORTAFOGLIO ---
+# --- PORTAFOGLI OTTIMIZZATI ---
+if prices.shape[1] > 1:
+    st.subheader("Portafogli ottimizzati")
+    st.caption("Long-only, pesi tra 0% e 100%, somma = 100%. Ottimizzazione con scipy (SLSQP).")
+
+    try:
+        portfolios = optimal_portfolios(returns, risk_free_rate)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+
+    # Tabella di confronto delle metriche
+    rows = {}
+    for name, w in portfolios.items():
+        ret, vol, shp = portfolio_performance(w, returns, risk_free_rate)
+        rows[name] = {
+            "Rendimento atteso (%)": ret * 100,
+            "Volatilita (%)": vol * 100,
+            "Sharpe ratio": shp,
+        }
+    st.dataframe(pd.DataFrame(rows).T.round(2))
+
+    # Pesi di ogni portafoglio
+    weights_df = pd.DataFrame(portfolios, index=prices.columns) * 100
+    fig4 = px.bar(
+        weights_df,
+        barmode="group",
+        labels={"value": "Peso (%)", "index": "Titolo", "variable": "Portafoglio"},
+    )
+    st.plotly_chart(fig4)
+
+    with st.expander("Mostra tabella dei pesi (%)"):
+        st.dataframe(weights_df.round(2))
+
+# --- PORTAFOGLIO MANUALE ---
 st.subheader("Il tuo portafoglio")
 st.caption("Inserisci il peso di ogni titolo in %. Il totale deve essere 100%.")
 
