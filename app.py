@@ -8,6 +8,9 @@ from src.data import clean_prices, download_prices, parse_tickers
 from src.portfolio import (
     annualized_volatility,
     asset_summary,
+    average_correlation,
+    correlation_matrix,
+    covariance_matrix,
     cumulative_returns,
     daily_returns,
     portfolio_performance,
@@ -101,6 +104,34 @@ st.plotly_chart(fig2)
 st.subheader("Statistiche per titolo")
 st.caption("Valori in %. Rendimenti e volatilita annualizzati con 252 giorni di borsa.")
 st.dataframe((asset_summary(prices) * 100).round(2))
+
+# --- CORRELAZIONE E COVARIANZA ---
+if prices.shape[1] > 1:
+    st.subheader("Correlazione tra i titoli")
+    corr = correlation_matrix(returns)
+
+    st.metric("Correlazione media tra i titoli", f"{average_correlation(corr):.2f}")
+
+    fig3 = px.imshow(
+        corr,
+        text_auto=".2f",
+        color_continuous_scale="RdBu_r",  # rosso = positiva, blu = negativa
+        zmin=-1,
+        zmax=1,
+        aspect="auto",
+    )
+    st.plotly_chart(fig3)
+    st.caption(
+        "Correlazione dei rendimenti giornalieri. Piu e bassa, "
+        "maggiore e il beneficio della diversificazione."
+    )
+
+    with st.expander("Mostra matrice di covarianza (annualizzata)"):
+        st.dataframe(covariance_matrix(returns).round(4))
+        st.caption(
+            "Sulla diagonale: varianze dei singoli titoli. "
+            "La radice quadrata della diagonale e la volatilita annua."
+        )
 
 # --- PORTAFOGLIO ---
 st.subheader("Il tuo portafoglio")

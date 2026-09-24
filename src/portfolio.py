@@ -70,3 +70,15 @@ def portfolio_performance(weights, returns, risk_free_rate):
     port_ret = portfolio_return(weights, mean_returns)
     port_vol = portfolio_volatility(weights, cov)
     return port_ret, port_vol, sharpe_ratio(port_ret, port_vol, risk_free_rate)
+
+
+def correlation_matrix(returns):
+    """Matrice di correlazione dei rendimenti giornalieri (valori tra -1 e 1)."""
+    return returns.corr()
+
+
+def average_correlation(corr):
+    """Correlazione media tra tutte le coppie di titoli (esclusa la diagonale)."""
+    n = corr.shape[0]
+    upper = corr.to_numpy()[np.triu_indices(n, k=1)]
+    return float(upper.mean())
