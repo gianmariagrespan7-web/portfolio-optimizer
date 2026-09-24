@@ -26,9 +26,12 @@ from src.portfolio import (
     daily_returns,
     drawdown_series,
     growth_of_one,
+    historical_cvar,
+    historical_var,
     performance_summary,
     portfolio_daily_returns,
     portfolio_performance,
+    risk_summary,
 )
 
 BENCHMARK = "SPY"
@@ -150,6 +153,14 @@ if n_assets > 1:
         st.error(str(e))
         st.stop()
 
+# Benchmark data (used by the Benchmark and Risk Metrics tabs)
+try:
+    bench_raw = load_prices((BENCHMARK,), start, end)
+    bench_prices, _ = clean_prices(bench_raw)
+except Exception:
+    bench_prices = pd.DataFrame()
+bench_rets = None if bench_prices.empty else daily_returns(bench_prices)[BENCHMARK]
+
 # ---------- Summary KPIs ----------
 
 k1, k2, k3, k4 = st.columns(4)
@@ -162,17 +173,19 @@ if portfolios:
     )
     k4.metric("Max Sharpe ratio", f"{best_sharpe:.2f}")
 
-tab_assets, tab_corr, tab_frontier, tab_optimal, tab_custom, tab_bench = st.tabs([
+(tab_assets, tab_corr, tab_frontier, tab_optimal,
+ tab_custom, tab_bench, tab_risk) = st.tabs([
     "Asset Performance",
     "Correlation",
     "Efficient Frontier",
     "Optimal Portfolios",
     "Custom Portfolio",
     "Benchmark",
+    "Risk Metrics",
 ])
 
 # Note: tabs can be filled in any order. The Custom Portfolio tab is filled
-# first because the Frontier and Benchmark tabs use its weights.
+# first because the other tabs use its weights.
 
 # ---------- Custom Portfolio ----------
 
@@ -208,6 +221,19 @@ with tab_custom:
             f"Diversification lowers portfolio volatility by "
             f"{(avg_vol - vol) * 100:.2f} percentage points."
         )
+
+# ---------- Daily returns of all portfolios (+ benchmark) ----------
+
+series = {}
+if custom_weights is not None:
+    series["Your portfolio"] = portfolio_daily_returns(returns, custom_weights)
+for name, w in portfolios.items():
+    series[name] = portfolio_daily_returns(returns, w)
+if bench_rets is not None:
+    series[BENCHMARK] = bench_rets
+
+# dropna aligns the dates: keep only days common to all series
+all_rets = pd.DataFrame(series).dropna()
 
 # ---------- Asset Performance ----------
 
@@ -362,25 +388,11 @@ with tab_frontier:
 # ---------- Benchmark ----------
 
 with tab_bench:
-    try:
-        bench_raw = load_prices((BENCHMARK,), start, end)
-        bench_prices, _ = clean_prices(bench_raw)
-    except Exception:
-        bench_prices = pd.DataFrame()
-
-    if bench_prices.empty:
+    if bench_rets is None:
         st.warning(f"Could not download {BENCHMARK}: comparison not available.")
+    elif all_rets.empty:
+        st.info("No portfolio to compare yet.")
     else:
-        series = {}
-        if custom_weights is not None:
-            series["Your portfolio"] = portfolio_daily_returns(returns, custom_weights)
-        for name, w in portfolios.items():
-            series[name] = portfolio_daily_returns(returns, w)
-        series[BENCHMARK] = daily_returns(bench_prices)[BENCHMARK]
-
-        # dropna aligns the dates: keep only days common to all series
-        all_rets = pd.DataFrame(series).dropna()
-
         st.markdown("**Growth of $1 invested**")
         fig = px.line(all_rets.apply(growth_of_one))
         st.plotly_chart(style_time_chart(fig, "Value ($)", prefix="$"))
@@ -404,6 +416,63 @@ with tab_bench:
             "the same data, so this comparison is optimistic and does not predict "
             "future performance."
         )
+
+# ---------- Risk Metrics ----------
+
+with tab_risk:
+    if all_rets.empty:
+        st.info("No portfolio to analyze yet.")
+    else:
+        confidence = st.select_slider(
+            "Confidence level",
+            options=[0.90, 0.95, 0.99], value=0.95,
+            format_func=lambda x: f"{x:.0%}",
+        )
+        level = f"{confidence:.0%}"
+
+        bench_for_beta = all_rets[BENCHMARK] if BENCHMARK in all_rets else None
+        risk_df = pd.DataFrame({
+            name: risk_summary(all_rets[name], confidence, bench_for_beta)
+            for name in all_rets.columns
+        }).T
+        st.dataframe(risk_df.round(2))
+        st.caption(
+            f"VaR and CVaR are 1-day losses, shown as positive numbers. "
+            f"Beta is measured against {BENCHMARK} on daily returns."
+        )
+
+        st.markdown("**Distribution of daily returns**")
+        choice = st.selectbox("Portfolio", list(all_rets.columns))
+        rets = all_rets[choice]
+        var = historical_var(rets, confidence)
+        cvar = historical_cvar(rets, confidence)
+
+        fig = px.histogram(rets * 100, nbins=80)
+        fig.add_vline(x=-var * 100, line_dash="dash", line_color="orange",
+                      annotation_text=f"VaR {level}")
+        fig.add_vline(x=-cvar * 100, line_dash="dash", line_color="red",
+                      annotation_text=f"CVaR {level}",
+                      annotation_position="bottom left")
+        fig.update_layout(xaxis_title="Daily return (%)",
+                          yaxis_title="Number of days", showlegend=False)
+        st.plotly_chart(fig)
+        st.caption(
+            f"On {level} of days the loss was smaller than {var:.2%} (VaR). "
+            f"On the remaining worst days, the average loss was {cvar:.2%} (CVaR)."
+        )
+
+        with st.expander("Limitations of these metrics"):
+            st.markdown(
+                "- **Historical window:** all metrics depend on one past period "
+                "and do not predict future crises.\n"
+                "- **Parametric VaR** assumes normal returns; real returns have "
+                "fat tails, so it tends to underestimate extreme losses.\n"
+                "- **VaR** says where the tail starts, not how deep it is; "
+                "**CVaR** addresses this.\n"
+                "- **1-day horizon:** scaling to 10 days with the square root of "
+                "time assumes independent returns.\n"
+                "- **Beta** changes over time and depends on the chosen benchmark."
+            )
 
 st.divider()
 st.caption(

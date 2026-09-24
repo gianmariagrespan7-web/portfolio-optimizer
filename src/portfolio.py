@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 TRADING_DAYS = 252  # trading days in a year
 
@@ -126,3 +127,48 @@ def performance_summary(daily_rets, risk_free_rate):
         "Sharpe ratio": (ann_ret - risk_free_rate) / vol,
         "Max drawdown (%)": max_drawdown(daily_rets) * 100,
     }
+
+# ---------- Risk metrics ----------
+
+def beta(asset_rets, benchmark_rets):
+    """Beta = Cov(r_p, r_m) / Var(r_m), on daily returns."""
+    aligned = pd.concat([asset_rets, benchmark_rets], axis=1).dropna()
+    cov = aligned.cov().iloc[0, 1]
+    return float(cov / aligned.iloc[:, 1].var())
+
+
+def historical_var(daily_rets, confidence=0.95):
+    """1-day historical VaR: the loss exceeded on only (1 - confidence) of days.
+
+    Returned as a positive number (a loss).
+    """
+    return float(-np.percentile(daily_rets, (1 - confidence) * 100))
+
+
+def parametric_var(daily_rets, confidence=0.95):
+    """1-day Gaussian VaR: -(mu + z * sigma), assuming normal returns."""
+    z = norm.ppf(1 - confidence)  # e.g. -1.645 at 95%
+    return float(-(daily_rets.mean() + z * daily_rets.std()))
+
+
+def historical_cvar(daily_rets, confidence=0.95):
+    """Expected Shortfall: average loss on the days worse than the VaR."""
+    var = historical_var(daily_rets, confidence)
+    tail = daily_rets[daily_rets <= -var]
+    return float(-tail.mean())
+
+
+def risk_summary(daily_rets, confidence=0.95, benchmark_rets=None):
+    """Risk metrics of a daily return series (VaR and CVaR as positive losses)."""
+    level = f"{confidence:.0%}"
+    summary = {}
+    if benchmark_rets is not None:
+        summary["Beta"] = beta(daily_rets, benchmark_rets)
+    summary.update({
+        f"VaR {level} historical (%)": historical_var(daily_rets, confidence) * 100,
+        f"VaR {level} parametric (%)": parametric_var(daily_rets, confidence) * 100,
+        f"CVaR {level} (%)": historical_cvar(daily_rets, confidence) * 100,
+        "Worst day (%)": daily_rets.min() * 100,
+        "Max drawdown (%)": max_drawdown(daily_rets) * 100,
+    })
+    return summary
