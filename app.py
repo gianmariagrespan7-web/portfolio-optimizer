@@ -273,14 +273,14 @@ all_rets = pd.DataFrame(series).dropna()
 
 with tab_assets:
     st.markdown("**Cumulative return**")
-    fig = px.line(cumulative_returns(returns) * 100)
+    fig = px.line(cumulative_returns(returns) * 100, render_mode="svg")
     st.plotly_chart(style_time_chart(fig, "Cumulative return (%)", suffix="%"))
 
     st.markdown("**Asset statistics** (annualized with 252 trading days)")
     st.dataframe((stats * 100).round(2).add_suffix(" (%)"))
 
     with st.expander("Adjusted prices"):
-        fig = px.line(prices)
+        fig = px.line(prices, render_mode="svg")
         st.plotly_chart(style_time_chart(fig, "Adjusted price"))
         st.dataframe(prices.tail(10).round(2))
 
@@ -435,7 +435,7 @@ with tab_bench:
         st.info("No portfolio to compare yet.")
     else:
         st.markdown("**Growth of $1 invested**")
-        fig = px.line(all_rets.apply(growth_of_one))
+        fig = px.line(all_rets.apply(growth_of_one), render_mode="svg")
         st.plotly_chart(style_time_chart(fig, "Value ($)", prefix="$"))
 
         st.markdown("**Historical performance**")
@@ -446,7 +446,7 @@ with tab_bench:
         st.dataframe(summary.round(2))
 
         st.markdown("**Drawdown** (loss from the previous peak)")
-        fig = px.line(all_rets.apply(drawdown_series) * 100)
+        fig = px.line(all_rets.apply(drawdown_series) * 100, render_mode="svg")
         st.plotly_chart(style_time_chart(fig, "Drawdown (%)", suffix="%"))
 
         if custom_weights is None:
