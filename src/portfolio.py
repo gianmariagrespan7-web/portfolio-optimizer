@@ -41,3 +41,32 @@ def asset_summary(prices):
         "CAGR": cagr(prices),
         "Volatilita annua": annualized_volatility(returns),
     })
+
+
+def covariance_matrix(returns):
+    """Matrice di covarianza annualizzata (covarianza giornaliera x 252)."""
+    return returns.cov() * TRADING_DAYS
+
+
+def portfolio_return(weights, mean_returns):
+    """Rendimento atteso del portafoglio: w' * mu."""
+    return float(weights @ mean_returns)
+
+
+def portfolio_volatility(weights, cov_matrix):
+    """Volatilita del portafoglio: radice di w' * Sigma * w."""
+    return float(np.sqrt(weights @ cov_matrix @ weights))
+
+
+def sharpe_ratio(port_return, port_vol, risk_free_rate):
+    """(Rp - Rf) / sigma_p, con valori annualizzati."""
+    return (port_return - risk_free_rate) / port_vol
+
+
+def portfolio_performance(weights, returns, risk_free_rate):
+    """Ritorna (rendimento atteso, volatilita, Sharpe) del portafoglio."""
+    mean_returns = annualized_return(returns).to_numpy()
+    cov = covariance_matrix(returns).to_numpy()
+    port_ret = portfolio_return(weights, mean_returns)
+    port_vol = portfolio_volatility(weights, cov)
+    return port_ret, port_vol, sharpe_ratio(port_ret, port_vol, risk_free_rate)
