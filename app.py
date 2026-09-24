@@ -9,13 +9,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data import clean_prices, download_prices, parse_tickers
+from src.data import DataDownloadError, clean_prices, download_prices, parse_tickers
 from src.optimization import (
     efficient_frontier,
     optimal_portfolios,
     random_portfolios,
 )
 from src.portfolio import (
+    TRADING_DAYS,
     annualized_return,
     annualized_volatility,
     asset_summary,
@@ -36,6 +37,8 @@ from src.portfolio import (
 
 BENCHMARK = "SPY"
 DEFAULT_TICKERS = "AAPL, MSFT, NVDA, AMZN, GOOGL, META"
+MAX_TICKERS = 20        # keeps optimization fast and downloads reasonable
+MIN_OBSERVATIONS = 60   # minimum trading days for meaningful estimates
 
 st.set_page_config(page_title="Portfolio Optimizer", page_icon="📈", layout="wide")
 
@@ -44,6 +47,7 @@ st.set_page_config(page_title="Portfolio Optimizer", page_icon="📈", layout="w
 
 @st.cache_data(ttl=3600, show_spinner="Downloading market data...")
 def load_prices(tickers, start, end):
+    # Raises DataDownloadError on failure: exceptions are not cached
     return download_prices(tickers, start, end)
 
 
@@ -100,31 +104,44 @@ st.caption(
     "Educational project, not investment advice."
 )
 
-# ---------- Input validation and data ----------
+# ---------- Input validation ----------
 
-tickers = parse_tickers(ticker_text)
+tickers, malformed = parse_tickers(ticker_text)
+if malformed:
+    st.warning(f"Invalid ticker format, ignored: {', '.join(malformed)}")
 if not tickers:
-    st.info("Enter at least one ticker in the sidebar.")
+    st.info("Enter at least one valid ticker in the sidebar (e.g. AAPL, MSFT).")
+    st.stop()
+if len(tickers) > MAX_TICKERS:
+    st.error(f"Too many tickers ({len(tickers)}). The maximum is {MAX_TICKERS}.")
+    st.stop()
+if start >= date.today():
+    st.error("The start date cannot be today or in the future.")
     st.stop()
 if start >= end:
     st.error("The start date must be before the end date.")
     st.stop()
 
+# ---------- Data download and cleaning ----------
+
 try:
     raw = load_prices(tuple(tickers), start, end)
-except Exception as e:
-    st.error(f"Data download failed: {e}")
-    st.stop()
-
-if raw.empty:
-    st.error("No data downloaded. Check the tickers and your connection.")
+except DataDownloadError as e:
+    st.error(str(e))
+    st.button("Try again")  # clicking any button reruns the app (and the download)
     st.stop()
 
 prices, invalid = clean_prices(raw)
 if invalid:
-    st.warning(f"Tickers not found and ignored: {', '.join(invalid)}")
+    st.warning(
+        f"No data for: {', '.join(invalid)}. The ticker may not exist on "
+        "Yahoo Finance, or its download failed."
+    )
+    if st.button("Retry download"):
+        load_prices.clear()  # forget cached downloads and try again
+        st.rerun()
 if prices.empty:
-    st.error("No valid data for the selected period.")
+    st.error("No valid data for the selected tickers and period.")
     st.stop()
 if (prices.index[0].date() - start).days > 10:
     st.info(
@@ -132,8 +149,25 @@ if (prices.index[0].date() - start).days > 10:
         "(one asset probably has a shorter history)."
     )
 
+if len(prices) < MIN_OBSERVATIONS:
+    st.error(
+        f"Only {len(prices)} trading days of common data. At least "
+        f"{MIN_OBSERVATIONS} are needed for reliable estimates: choose a longer period."
+    )
+    st.stop()
+if len(prices) < TRADING_DAYS:
+    st.warning(
+        "Less than one year of data: annualized figures are extrapolated "
+        "and may be unreliable."
+    )
+
 n_assets = prices.shape[1]
-if n_assets * max_weight < 1:
+if n_assets == 1:
+    st.info(
+        "Only one asset selected: correlation, optimization and the efficient "
+        "frontier need at least two."
+    )
+elif n_assets * max_weight < 1:
     st.error(
         f"With {n_assets} assets the max weight must be at least "
         f"{math.ceil(100 / n_assets)}%, otherwise weights cannot sum to 100%."
@@ -149,17 +183,17 @@ portfolios = {}
 if n_assets > 1:
     try:
         portfolios = optimal_portfolios(returns, risk_free_rate, max_weight)
-    except ValueError as e:
-        st.error(str(e))
-        st.stop()
+    except Exception as e:
+        st.warning(f"Portfolio optimization failed ({e}). Optimized portfolios are not shown.")
 
 # Benchmark data (used by the Benchmark and Risk Metrics tabs)
+bench_rets = None
 try:
-    bench_raw = load_prices((BENCHMARK,), start, end)
-    bench_prices, _ = clean_prices(bench_raw)
-except Exception:
-    bench_prices = pd.DataFrame()
-bench_rets = None if bench_prices.empty else daily_returns(bench_prices)[BENCHMARK]
+    bench_prices, _ = clean_prices(load_prices((BENCHMARK,), start, end))
+    if not bench_prices.empty:
+        bench_rets = daily_returns(bench_prices)[BENCHMARK]
+except DataDownloadError:
+    pass  # handled inside the tabs
 
 # ---------- Summary KPIs ----------
 
@@ -281,7 +315,7 @@ with tab_corr:
 
 with tab_optimal:
     if not portfolios:
-        st.info("Add at least two assets to optimize a portfolio.")
+        st.info("Optimized portfolios are not available for this selection.")
     else:
         st.caption(
             f"Long-only, max {max_weight_pct}% per asset, weights sum to 100%. "
@@ -312,78 +346,85 @@ with tab_optimal:
 
 with tab_frontier:
     if not portfolios:
-        st.info("Add at least two assets to build the efficient frontier.")
+        st.info("The efficient frontier is not available for this selection.")
     else:
-        frontier, cloud = compute_frontier(returns, risk_free_rate, max_weight)
-        fig = go.Figure()
+        try:
+            frontier, cloud = compute_frontier(returns, risk_free_rate, max_weight)
+        except Exception:
+            frontier, cloud = pd.DataFrame(), pd.DataFrame()
 
-        # 1. Random portfolios, colored by Sharpe ratio
-        fig.add_trace(go.Scatter(
-            x=cloud["Volatility"] * 100, y=cloud["Return"] * 100,
-            mode="markers", name="Random portfolios", opacity=0.5,
-            marker=dict(size=4, color=cloud["Sharpe"], colorscale="Viridis",
-                        showscale=True, colorbar=dict(title="Sharpe")),
-            hovertemplate="Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
-        ))
+        if frontier.empty:
+            st.warning("The efficient frontier could not be computed for this selection.")
+        else:
+            fig = go.Figure()
 
-        # 2. Efficient frontier
-        fig.add_trace(go.Scatter(
-            x=frontier["Volatility"] * 100, y=frontier["Return"] * 100,
-            mode="lines", name="Efficient frontier",
-            line=dict(color="#2c3e50", width=3),
-            hovertemplate="Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
-        ))
-
-        # 3. Capital Market Line: from Rf, tangent at the Max Sharpe portfolio
-        x_cml = np.array([0, stats["Annual volatility"].max() * 100])
-        fig.add_trace(go.Scatter(
-            x=x_cml, y=risk_free_pct + best_sharpe * x_cml,
-            mode="lines", name="Capital Market Line",
-            line=dict(color="gray", dash="dash"), hoverinfo="skip",
-        ))
-
-        # 4. Optimal portfolios (stars) and custom portfolio (X)
-        markers = [
-            ("Min Volatility", portfolios["Min Volatility"], "blue", "star"),
-            ("Max Sharpe", portfolios["Max Sharpe"], "red", "star"),
-        ]
-        if custom_weights is not None:
-            markers.append(("Your portfolio", custom_weights, "green", "x"))
-
-        for name, w, color, symbol in markers:
-            r, v, s = portfolio_performance(w, returns, risk_free_rate)
+            # 1. Random portfolios, colored by Sharpe ratio
             fig.add_trace(go.Scatter(
-                x=[v * 100], y=[r * 100], mode="markers", name=name,
-                marker=dict(size=18, color=color, symbol=symbol,
-                            line=dict(width=1, color="black")),
-                hovertemplate=(f"{name}<br>Volatility: %{{x:.2f}}%<br>"
-                               f"Return: %{{y:.2f}}%<br>Sharpe: {s:.2f}<extra></extra>"),
+                x=cloud["Volatility"] * 100, y=cloud["Return"] * 100,
+                mode="markers", name="Random portfolios", opacity=0.5,
+                marker=dict(size=4, color=cloud["Sharpe"], colorscale="Viridis",
+                            showscale=True, colorbar=dict(title="Sharpe")),
+                hovertemplate="Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
             ))
 
-        # 5. Single assets, drawn last so their labels stay on top
-        fig.add_trace(go.Scatter(
-            x=stats["Annual volatility"] * 100,
-            y=stats["Mean annual return"] * 100,
-            mode="markers+text", name="Single assets",
-            text=stats.index, textposition="middle right",
-            textfont=dict(size=13),
-            marker=dict(size=11, color="orange", symbol="diamond",
-                        line=dict(width=1, color="black")),
-            hovertemplate="%{text}<br>Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
-        ))
+            # 2. Efficient frontier
+            fig.add_trace(go.Scatter(
+                x=frontier["Volatility"] * 100, y=frontier["Return"] * 100,
+                mode="lines", name="Efficient frontier",
+                line=dict(color="#2c3e50", width=3),
+                hovertemplate="Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
+            ))
 
-        fig.update_layout(
-            xaxis_title="Annual volatility (%)",
-            yaxis_title="Expected annual return (%)",
-            height=620,
-            legend=dict(orientation="h", y=-0.15),
-        )
-        st.plotly_chart(fig)
-        st.caption(
-            "Each dot is a portfolio. The efficient frontier is the upper-left edge: "
-            "the highest expected return for each level of risk. The Capital Market "
-            "Line touches the frontier at the Max Sharpe portfolio."
-        )
+            # 3. Capital Market Line: from Rf, tangent at the Max Sharpe portfolio
+            x_cml = np.array([0, stats["Annual volatility"].max() * 100])
+            fig.add_trace(go.Scatter(
+                x=x_cml, y=risk_free_pct + best_sharpe * x_cml,
+                mode="lines", name="Capital Market Line",
+                line=dict(color="gray", dash="dash"), hoverinfo="skip",
+            ))
+
+            # 4. Optimal portfolios (stars) and custom portfolio (X)
+            markers = [
+                ("Min Volatility", portfolios["Min Volatility"], "blue", "star"),
+                ("Max Sharpe", portfolios["Max Sharpe"], "red", "star"),
+            ]
+            if custom_weights is not None:
+                markers.append(("Your portfolio", custom_weights, "green", "x"))
+
+            for name, w, color, symbol in markers:
+                r, v, s = portfolio_performance(w, returns, risk_free_rate)
+                fig.add_trace(go.Scatter(
+                    x=[v * 100], y=[r * 100], mode="markers", name=name,
+                    marker=dict(size=18, color=color, symbol=symbol,
+                                line=dict(width=1, color="black")),
+                    hovertemplate=(f"{name}<br>Volatility: %{{x:.2f}}%<br>"
+                                   f"Return: %{{y:.2f}}%<br>Sharpe: {s:.2f}<extra></extra>"),
+                ))
+
+            # 5. Single assets, drawn last so their labels stay on top
+            fig.add_trace(go.Scatter(
+                x=stats["Annual volatility"] * 100,
+                y=stats["Mean annual return"] * 100,
+                mode="markers+text", name="Single assets",
+                text=stats.index, textposition="middle right",
+                textfont=dict(size=13),
+                marker=dict(size=11, color="orange", symbol="diamond",
+                            line=dict(width=1, color="black")),
+                hovertemplate="%{text}<br>Volatility: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>",
+            ))
+
+            fig.update_layout(
+                xaxis_title="Annual volatility (%)",
+                yaxis_title="Expected annual return (%)",
+                height=620,
+                legend=dict(orientation="h", y=-0.15),
+            )
+            st.plotly_chart(fig)
+            st.caption(
+                "Each dot is a portfolio. The efficient frontier is the upper-left edge: "
+                "the highest expected return for each level of risk. The Capital Market "
+                "Line touches the frontier at the Max Sharpe portfolio."
+            )
 
 # ---------- Benchmark ----------
 
@@ -440,6 +481,8 @@ with tab_risk:
             f"VaR and CVaR are 1-day losses, shown as positive numbers. "
             f"Beta is measured against {BENCHMARK} on daily returns."
         )
+        if bench_for_beta is None:
+            st.info(f"Beta is not shown because {BENCHMARK} could not be downloaded.")
 
         st.markdown("**Distribution of daily returns**")
         choice = st.selectbox("Portfolio", list(all_rets.columns))
