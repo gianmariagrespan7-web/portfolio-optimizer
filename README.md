@@ -6,7 +6,7 @@ Select a set of stocks and a time period: the app downloads historical market da
 
 > Educational project built to apply the quantitative portfolio theory studied in my Finance degree. It is not investment advice.
 
-**Live demo:** _coming soon_
+**Live demo:** [portfolio-optimizer.streamlit.app](https://g-portfolio-optimizer.streamlit.app/)
 
 ![Efficient frontier](docs/frontier.png)
 
