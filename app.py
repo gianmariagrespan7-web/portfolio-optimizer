@@ -21,8 +21,14 @@ from src.portfolio import (
     covariance_matrix,
     cumulative_returns,
     daily_returns,
+    drawdown_series,
+    growth_of_one,
+    performance_summary,
+    portfolio_daily_returns,
     portfolio_performance,
 )
+
+BENCHMARK = "SPY"
 
 st.set_page_config(page_title="Portfolio Optimizer", layout="wide")
 
@@ -153,6 +159,7 @@ if prices.shape[1] > 1:
         )
 
 # --- PORTAFOGLI OTTIMIZZATI ---
+portfolios = {}
 if prices.shape[1] > 1:
     st.subheader("Portafogli ottimizzati")
     st.caption("Long-only, pesi tra 0% e 100%, somma = 100%. Ottimizzazione con scipy (SLSQP).")
@@ -288,3 +295,51 @@ st.caption(
     f"Grazie alla diversificazione la volatilita del portafoglio e piu bassa "
     f"di {(avg_vol - port_vol) * 100:.2f} punti percentuali."
 )
+
+# --- CONFRONTO CON IL BENCHMARK ---
+st.subheader(f"Confronto con il benchmark ({BENCHMARK})")
+
+try:
+    bench_raw = load_prices((BENCHMARK,), start, end)
+    bench_prices, _ = clean_prices(bench_raw)
+except Exception:
+    bench_prices = pd.DataFrame()
+
+if bench_prices.empty:
+    st.warning(f"Impossibile scaricare {BENCHMARK}: confronto non disponibile.")
+else:
+    # Rendimenti giornalieri di ogni portafoglio + benchmark
+    series = {"Il tuo portafoglio": portfolio_daily_returns(returns, weights)}
+    for name, w in portfolios.items():
+        series[name] = portfolio_daily_returns(returns, w)
+    series[BENCHMARK] = daily_returns(bench_prices)[BENCHMARK]
+
+    # dropna allinea le date: teniamo solo i giorni comuni a tutti
+    all_rets = pd.DataFrame(series).dropna()
+
+    st.markdown("**Crescita di 1 $ investito**")
+    fig6 = px.line(
+        all_rets.apply(growth_of_one),
+        labels={"value": "Valore ($)", "index": "Data", "variable": "Portafoglio"},
+    )
+    st.plotly_chart(fig6)
+
+    st.markdown("**Metriche di performance storica**")
+    summary = pd.DataFrame({
+        name: performance_summary(all_rets[name], risk_free_rate)
+        for name in all_rets.columns
+    }).T
+    st.dataframe(summary.round(2))
+
+    st.markdown("**Drawdown (perdita rispetto al massimo precedente)**")
+    fig7 = px.line(
+        all_rets.apply(drawdown_series) * 100,
+        labels={"value": "Drawdown (%)", "index": "Data", "variable": "Portafoglio"},
+    )
+    st.plotly_chart(fig7)
+
+    st.warning(
+        "Attenzione: i portafogli ottimizzati sono calcolati sugli stessi dati "
+        "su cui vengono valutati (analisi in-sample). Il confronto con il "
+        "benchmark e quindi ottimistico e non indica performance future."
+    )

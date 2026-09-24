@@ -82,3 +82,38 @@ def average_correlation(corr):
     n = corr.shape[0]
     upper = corr.to_numpy()[np.triu_indices(n, k=1)]
     return float(upper.mean())
+
+def portfolio_daily_returns(returns, weights):
+    """Rendimenti giornalieri di un portafoglio a pesi costanti."""
+    return returns @ weights
+
+
+def growth_of_one(daily_rets):
+    """Valore nel tempo di 1 $ investito all'inizio."""
+    return (1 + daily_rets).cumprod()
+
+
+def drawdown_series(daily_rets):
+    """Perdita (in decimali) rispetto al massimo raggiunto fino a quel giorno."""
+    wealth = growth_of_one(daily_rets)
+    return wealth / wealth.cummax() - 1
+
+
+def max_drawdown(daily_rets):
+    """Peggior perdita da un picco al minimo successivo."""
+    return float(drawdown_series(daily_rets).min())
+
+
+def performance_summary(daily_rets, risk_free_rate):
+    """Metriche di performance storica di una serie di rendimenti giornalieri."""
+    wealth = growth_of_one(daily_rets)
+    years = len(daily_rets) / TRADING_DAYS
+    ann_ret = daily_rets.mean() * TRADING_DAYS
+    vol = daily_rets.std() * np.sqrt(TRADING_DAYS)
+    return {
+        "Rendimento cumulato (%)": (wealth.iloc[-1] - 1) * 100,
+        "CAGR (%)": (wealth.iloc[-1] ** (1 / years) - 1) * 100,
+        "Volatilita (%)": vol * 100,
+        "Sharpe ratio": (ann_ret - risk_free_rate) / vol,
+        "Max drawdown (%)": max_drawdown(daily_rets) * 100,
+    }
