@@ -1,6 +1,7 @@
 """Ottimizzazione di portafoglio: long-only, pesi che sommano a 1."""
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 
 from src.portfolio import (
@@ -16,9 +17,14 @@ def equal_weight(n):
     return np.full(n, 1 / n)
 
 
-def _optimize(objective, n, args=()):
-    """Minimizza 'objective' con i vincoli: somma pesi = 1 e 0 <= peso <= 1."""
+def _optimize(objective, n, args=(), extra_constraints=None):
+    """Minimizza 'objective' con i vincoli: somma pesi = 1 e 0 <= peso <= 1.
+
+    extra_constraints: vincoli aggiuntivi (es. rendimento target).
+    """
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    if extra_constraints:
+        constraints += extra_constraints
     bounds = [(0.0, 1.0)] * n
 
     result = minimize(
@@ -67,3 +73,51 @@ def optimal_portfolios(returns, risk_free_rate):
         "Min Volatility": min_volatility(cov),
         "Max Sharpe": max_sharpe(mean_returns, cov, risk_free_rate),
     }
+
+
+def efficient_frontier(mean_returns, cov_matrix, n_points=40):
+    """Per ogni rendimento target trova il portafoglio a volatilita minima.
+
+    Va dal portafoglio Min Volatility (sotto e inefficiente)
+    fino al titolo con il rendimento atteso piu alto.
+    """
+    n = len(mean_returns)
+    ret_min = portfolio_return(min_volatility(cov_matrix), mean_returns)
+    ret_max = float(np.max(mean_returns))
+
+    points = []
+    for target in np.linspace(ret_min, ret_max, n_points):
+        # Vincolo extra: rendimento del portafoglio = target
+        # (t=target "congela" il valore di target per questa iterazione)
+        target_constraint = {
+            "type": "eq",
+            "fun": lambda w, t=target: portfolio_return(w, mean_returns) - t,
+        }
+        try:
+            w = _optimize(
+                portfolio_volatility, n,
+                args=(cov_matrix,), extra_constraints=[target_constraint],
+            )
+        except ValueError:
+            continue  # se un punto non converge, lo saltiamo
+
+        points.append({
+            "Volatilita": portfolio_volatility(w, cov_matrix),
+            "Rendimento": portfolio_return(w, mean_returns),
+        })
+    return pd.DataFrame(points)
+
+
+def random_portfolios(mean_returns, cov_matrix, risk_free_rate,
+                      n_portfolios=3000, seed=42):
+    """Genera portafogli con pesi casuali (distribuzione di Dirichlet)."""
+    rng = np.random.default_rng(seed)  # seed fisso = risultati riproducibili
+    n = len(mean_returns)
+    all_weights = rng.dirichlet(np.ones(n), n_portfolios)
+
+    rets = [portfolio_return(w, mean_returns) for w in all_weights]
+    vols = [portfolio_volatility(w, cov_matrix) for w in all_weights]
+
+    df = pd.DataFrame({"Volatilita": vols, "Rendimento": rets})
+    df["Sharpe"] = (df["Rendimento"] - risk_free_rate) / df["Volatilita"]
+    return df

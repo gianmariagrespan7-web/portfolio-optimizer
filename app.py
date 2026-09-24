@@ -3,11 +3,17 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.data import clean_prices, download_prices, parse_tickers
-from src.optimization import optimal_portfolios
+from src.optimization import (
+    efficient_frontier,
+    optimal_portfolios,
+    random_portfolios,
+)
 from src.portfolio import (
+    annualized_return,
     annualized_volatility,
     asset_summary,
     average_correlation,
@@ -29,6 +35,16 @@ st.caption("MVP: analisi e ottimizzazione di portafoglio con dati storici")
 @st.cache_data(ttl=3600, show_spinner="Download dei dati...")
 def load_prices(tickers, start, end):
     return download_prices(tickers, start, end)
+
+
+# Anche la frontiera e in cache: sono ~40 ottimizzazioni + 3000 portafogli
+@st.cache_data(show_spinner="Calcolo della frontiera efficiente...")
+def compute_frontier(returns, risk_free_rate):
+    mean_returns = annualized_return(returns).to_numpy()
+    cov = covariance_matrix(returns).to_numpy()
+    frontier = efficient_frontier(mean_returns, cov)
+    cloud = random_portfolios(mean_returns, cov, risk_free_rate)
+    return frontier, cloud
 
 
 # --- SIDEBAR ---
@@ -105,7 +121,8 @@ st.plotly_chart(fig2)
 
 st.subheader("Statistiche per titolo")
 st.caption("Valori in %. Rendimenti e volatilita annualizzati con 252 giorni di borsa.")
-st.dataframe((asset_summary(prices) * 100).round(2))
+stats = asset_summary(prices)
+st.dataframe((stats * 100).round(2))
 
 # --- CORRELAZIONE E COVARIANZA ---
 if prices.shape[1] > 1:
@@ -168,6 +185,70 @@ if prices.shape[1] > 1:
 
     with st.expander("Mostra tabella dei pesi (%)"):
         st.dataframe(weights_df.round(2))
+
+# --- FRONTIERA EFFICIENTE ---
+if prices.shape[1] > 1:
+    st.subheader("Frontiera efficiente")
+
+    frontier, cloud = compute_frontier(returns, risk_free_rate)
+
+    fig5 = go.Figure()
+
+    # 1. Nuvola di portafogli casuali, colorati per Sharpe
+    fig5.add_trace(go.Scatter(
+        x=cloud["Volatilita"] * 100, y=cloud["Rendimento"] * 100,
+        mode="markers", name="Portafogli casuali",
+        marker=dict(size=4, color=cloud["Sharpe"], colorscale="Viridis",
+                    showscale=True, colorbar=dict(title="Sharpe")),
+    ))
+
+    # 2. Frontiera efficiente
+    fig5.add_trace(go.Scatter(
+        x=frontier["Volatilita"] * 100, y=frontier["Rendimento"] * 100,
+        mode="lines", name="Frontiera efficiente",
+        line=dict(color="black", width=3),
+    ))
+
+    # 3. Capital Market Line: da Rf, tangente al portafoglio Max Sharpe
+    _, _, max_shp = portfolio_performance(
+        portfolios["Max Sharpe"], returns, risk_free_rate
+    )
+    x_cml = np.array([0, frontier["Volatilita"].max() * 100])
+    fig5.add_trace(go.Scatter(
+        x=x_cml, y=risk_free_pct + max_shp * x_cml,
+        mode="lines", name="Capital Market Line",
+        line=dict(color="gray", dash="dash"),
+    ))
+
+    # 4. Singoli titoli
+    fig5.add_trace(go.Scatter(
+        x=stats["Volatilita annua"] * 100,
+        y=stats["Rendimento medio annuo"] * 100,
+        mode="markers+text", name="Singoli titoli",
+        text=stats.index, textposition="top center",
+        marker=dict(size=10, color="orange", symbol="diamond"),
+    ))
+
+    # 5. Portafogli ottimali (stelle)
+    for name, color in [("Min Volatility", "blue"), ("Max Sharpe", "red")]:
+        r, v, _ = portfolio_performance(portfolios[name], returns, risk_free_rate)
+        fig5.add_trace(go.Scatter(
+            x=[v * 100], y=[r * 100], mode="markers", name=name,
+            marker=dict(size=18, color=color, symbol="star",
+                        line=dict(width=1, color="black")),
+        ))
+
+    fig5.update_layout(
+        xaxis_title="Volatilita annua (%)",
+        yaxis_title="Rendimento atteso annuo (%)",
+        height=600,
+        legend=dict(orientation="h", y=-0.15),
+    )
+    st.plotly_chart(fig5)
+    st.caption(
+        "Ogni punto e un portafoglio. La frontiera e il bordo superiore sinistro: "
+        "il massimo rendimento per ogni livello di rischio."
+    )
 
 # --- PORTAFOGLIO MANUALE ---
 st.subheader("Il tuo portafoglio")
